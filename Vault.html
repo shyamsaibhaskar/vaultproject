@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Offline Vault (AES-GCM • PBKDF2)</title>
+<style>
+/* ============================
+   PART 1 — HTML + CSS (UI)
+   ============================ */
+
+/* Reset + base */
+:root{
+  --bg:#0b0f13;
+  --panel:#121820;
+  --panel-2:#0e141b;
+  --accent:#5eead4;
+  --accent-2:#60a5fa;
+  --danger:#ef4444;
+  --muted:#9aa5b1;
+  --text:#e6edf3;
+  --ok:#22c55e;
+  --warn:#f59e0b;
+  --ring: 0 0 0 2px rgba(94,234,212,.25);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial;
+  background: radial-gradient(1200px 800px at 80% -20%, #12263b 0%, #0b0f13 40%), var(--bg);
+  color:var(--text);
+}
+a{color:var(--accent-2);text-decoration:none}
+.hidden{display:none !important}
+button, input, select, textarea{font:inherit;color:inherit}
+input, select, textarea{
+  background:#0b1219; border:1px solid #213042; color:var(--text);
+  padding:.7rem .8rem; border-radius:.6rem; width:100%;
+}
+input:focus, textarea:focus, select:focus{outline:none; box-shadow: var(--ring); border-color:#294a69}
+label{font-size:.9rem; color:#c9d5e1}
+
+/* Layout */
+.container{
+  max-width:1100px; margin:0 auto; padding:18px;
+}
+.card{
+  background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+  border:1px solid #1c2430; border-radius:1rem; padding:18px; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+}
+.grid{display:grid; gap:12px}
+.grid-2{grid-template-columns: repeat(2, minmax(0,1fr))}
+.grid-3{grid-template-columns: repeat(3, minmax(0,1fr))}
+.row{display:flex; gap:10px; align-items:center}
+.space{height:10px}
+
+/* Buttons */
+.btn{
+  background:#15202b; border:1px solid #223246; color:var(--text);
+  padding:.7rem 1rem; border-radius:.6rem; cursor:pointer; transition:.2s;
+}
+.btn:hover{transform: translateY(-1px); border-color:#2b4057}
+.btn.primary{background: linear-gradient(90deg, #1b3349, #163a36); border-color:#214655}
+.btn.accent{background: linear-gradient(90deg, #245a52, #1a3d61); border-color:#2e6f7c}
+.btn.ok{background:#15361d; border-color:#21572d}
+.btn.danger{background:#2b1414; border-color:#4a1d1d; color:#ffd3d3}
+.btn.ghost{background:transparent; border-color:#253242}
+.tag{font-size:.75rem; padding:.2rem .45rem; border-radius:.4rem; border:1px solid #283546; color:#c7d2de}
+
+/* Header */
+.header{
+  display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px;
+}
+.brand{
+  display:flex; align-items:center; gap:10px; user-select:none; cursor:pointer;
+}
+.brand .logo{
+  width:34px; height:34px; border-radius:10px; display:grid; place-items:center;
+  background: radial-gradient(120% 120% at 0% 0%, #1f4a68 0%, #163041 60%, #0b0f13 100%);
+  border:1px solid #193042; box-shadow: inset 0 0 30px rgba(96,165,250,.25);
+}
+.brand .logo span{font-weight:700; color:var(--accent)}
+.header .actions{display:flex; gap:8px}
+
+/* Sections */
+#setup, #unlock, #vault{margin-top:18px}
+.section-title{font-weight:700; letter-spacing:.2px; margin-bottom:10px}
+
+/* Vault list */
+.list{display:grid; gap:10px}
+.item{
+  display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;
+  padding:12px; border-radius:.8rem; background:#0b1219; border:1px solid #1a2736;
+}
+.item:hover{border-color:#2a4159}
+.item h4{margin:0 0 4px;font-size:1rem}
+.item small{color:var(--muted)}
+.kv{display:flex; flex-wrap:wrap; gap:6px 10px; margin-top:6px}
+.kv div{display:flex; gap:6px; align-items:center}
+.badge{font-size:.7rem; padding:.15rem .4rem; background:#13202c; border:1px solid #223346; border-radius:.4rem}
+.mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+
+/* Modals */
+.modal{
+  position:fixed; inset:0; display:none; place-items:center; background:rgba(2,10,20,.7); backdrop-filter: blur(6px); z-index:50;
+}
+.modal.open{display:grid}
+.modal .dialog{
+  width:min(560px, 92vw); background:linear-gradient(180deg, var(--panel) 0%, #0e141b 100%);
+  border:1px solid #1b2836; border-radius:1rem; padding:16px;
+}
+.modal .footer{display:flex; justify-content:flex-end; gap:8px; margin-top:10px}
+
+/* Pills / subtle */
+.subtle{font-size:.9rem; color:#cdd8e4}
+.small{font-size:.85rem; color:var(--muted)}
+hr{border:none; border-top:1px solid #1b2a3b; margin:10px 0}
+
+/* Screenshot “blur” toggle (best-effort) */
+.blur-guard.blur .guardable{filter: blur(8px)}
+</style>
+</head>
+<body class="blur-guard" data-locked="true">
+  <div class="container">
+    <div class="header">
+      <div class="brand" id="brandTap" title="Tap 5× for Panic Wipe">
+        <div class="logo"><span>🔐</span></div>
+        <div>
+          <div style="font-weight:700">Local Vault</div>
+          <div class="small">AES-256-GCM • PBKDF2 • Offline</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="toggleBlur" class="btn ghost" title="Blur/Unblur sensitive UI">Blur</button>
+        <button id="lockBtn" class="btn">Lock</button>
+      </div>
+    </div>
+
+    <!-- ============================
+         SETUP SECTION (first run)
+         ============================ -->
+    <section id="setup" class="card">
+      <div class="section-title">Create your vault</div>
+      <div class="grid grid-2">
+        <div>
+          <label>Master Password</label>
+          <input id="setupMaster" type="password" autocomplete="new-password" placeholder="Create a strong master password" />
+        </div>
+        <div>
+          <label>Confirm Master Password</label>
+          <input id="setupMaster2" type="password" autocomplete="new-password" placeholder="Confirm master password" />
+        </div>
+        <div>
+          <label>Backup PIN (for wipe only)</label>
+          <input id="setupPin" type="password" inputmode="numeric" placeholder="4–8 digits (hashed, used to wipe if forgotten)" />
+        </div>
+        <div>
+          <label>Optional Decoy Password (Fake Vault)</label>
+          <input id="setupDecoy" type="password" autocomplete="new-password" placeholder="Enter to open a believable fake vault" />
+        </div>
+        <div>
+          <label>Optional Panic Password (Auto-wipe)</label>
+          <input id="setupPanic" type="password" autocomplete="new-password" placeholder="Entering this anywhere wipes immediately" />
+        </div>
+        <div class="row">
+          <div class="tag">PBKDF2 / 200,000 iters</div>
+          <div class="tag">AES-GCM / 256-bit</div>
+          <div class="tag">Per-item IV</div>
+        </div>
+      </div>
+      <div class="space"></div>
+      <div class="row" style="justify-content:space-between">
+        <div class="small">Nothing is stored except salts, encrypted blobs, and hashed PINs. You cannot recover a lost password.</div>
+        <button id="btnCreate" class="btn primary">Create Vault</button>
+      </div>
+    </section>
+
+    <!-- ============================
+         UNLOCK SECTION
+         ============================ -->
+    <section id="unlock" class="card hidden">
+      <div class="section-title">Unlock your vault</div>
+      <div class="grid grid-2">
+        <div>
+          <label>Master / Decoy / Panic Password</label>
+          <input id="unlockPassword" type="password" autocomplete="current-password" placeholder="Enter your password" />
+        </div>
+        <div>
+          <label>or Backup PIN (to wipe)</label>
+          <input id="unlockPin" type="password" inputmode="numeric" placeholder="Enter PIN to wipe and reset" />
+        </div>
+      </div>
+      <div class="space"></div>
+      <div class="row" style="gap:8px">
+        <button id="btnUnlock" class="btn ok">Unlock</button>
+        <button id="btnWipeWithPin" class="btn danger">Wipe with PIN</button>
+        <button id="btnImport" class="btn">Import Encrypted JSON</button>
+        <input id="importFile" type="file" accept=".json,application/json" class="hidden" />
+      </div>
+      <div class="small" id="unlockHint"></div>
+    </section>
+
+    <!-- ============================
+         VAULT SECTION
+         ============================ -->
+    <section id="vault" class="hidden">
+      <div class="card guardable">
+        <div class="row" style="justify-content:space-between">
+          <div class="section-title">Vault dashboard <span class="tag" id="vaultMode">real</span></div>
+          <div class="row" style="gap:8px">
+            <button id="btnAdd" class="btn primary">Add Item</button>
+            <button id="btnExport" class="btn">Export</button>
+            <button id="btnSettings" class="btn">Settings</button>
+          </div>
+        </div>
+        <div class="row" style="gap:10px; align-items:flex-end">
+          <div style="flex:1">
+            <label>Search</label>
+            <input id="search" placeholder="Search by title, tag, type…" />
+          </div>
+          <div style="width:200px">
+            <label>Filter Type</label>
+            <select id="filterType">
+              <option value="">All</option>
+              <option value="login">Login</option>
+              <option value="note">Note</option>
+              <option value="pin">PIN / Bank</option>
+              <option value="seed">Crypto Seed</option>
+              <option value="file">File / Image</option>
+            </select>
+          </div>
+        </div>
+        <div class="space"></div>
+        <div class="list" id="list"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================
+       MODALS (Add/Edit, Generator, Settings, Item Key Prompt)
+       ============================ -->
+
+  <!-- Add/Edit Item Modal -->
+  <div class="modal" id="modalEdit">
+    <div class="dialog">
+      <div class="section-title" id="editTitle">Add item</div>
+      <div class="grid grid-2">
+        <div>
+          <label>Type</label>
+          <select id="fType">
+            <option value="login">Login</option>
+            <option value="note">Note</option>
+            <option value="pin">PIN / Bank</option>
+            <option value="seed">Crypto Seed</option>
+            <option value="file">File / Image (Base64)</option>
+          </select>
+        </div>
+        <div>
+          <label>Title</label>
+          <input id="fTitle" placeholder="eg. Gmail / Bank / Secret" />
+        </div>
+        <div>
+          <label>Username / Label</label>
+          <input id="fUser" placeholder="(optional) email/username/label" />
+        </div>
+        <div class="row" style="gap:8px">
+          <div style="flex:1">
+            <label>Secret / Value</label>
+            <input id="fSecret" type="password" placeholder="password / phrase / pin" />
+          </div>
+          <button id="toggleSecret" class="btn">👁</button>
+          <button id="openGen" class="btn">Gen</button>
+          <button id="btnCopySecret" class="btn">Copy</button>
+        </div>
+
+        <!-- NEW: Per-Item Key (optional) -->
+        <div style="grid-column:1 / -1">
+          <label>Per-Item Decrypt Key (optional)</label>
+          <input id="fItemKey" type="password" placeholder="If set, this item requires this key to view/edit" />
+          <div class="small">Leave blank to store under master key only. If the item already has a key and you leave this blank, it keeps the existing key.</div>
+        </div>
+
+        <div class="grid" style="grid-column: 1 / -1">
+          <label>Notes / Extra</label>
+          <textarea id="fNotes" rows="3" placeholder="Any extra info…"></textarea>
+        </div>
+        <div>
+          <label>Tags (comma-separated)</label>
+          <input id="fTags" placeholder="eg. email, finance, personal" />
+        </div>
+        <div>
+          <label>Attach File (stores as encrypted base64)</label>
+          <input id="fFile" type="file" />
+          <div class="small">Avoid very large files; all stays in localStorage.</div>
+        </div>
+      </div>
+      <div class="footer">
+        <button class="btn" id="btnCancelEdit">Cancel</button>
+        <button class="btn ok" id="btnSaveEdit">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Password Generator Modal -->
+  <div class="modal" id="modalGen">
+    <div class="dialog">
+      <div class="section-title">Password generator</div>
+      <div class="grid grid-3">
+        <div>
+          <label>Length</label>
+          <input id="gLen" type="number" value="20" min="6" max="128" />
+        </div>
+        <div class="row" style="align-items:center"><input id="gUpper" type="checkbox" checked/> &nbsp; <label>Uppercase</label></div>
+        <div class="row" style="align-items:center"><input id="gLower" type="checkbox" checked/> &nbsp; <label>Lowercase</label></div>
+        <div class="row" style="align-items:center"><input id="gDigits" type="checkbox" checked/> &nbsp; <label>Digits</label></div>
+        <div class="row" style="align-items:center"><input id="gSymbols" type="checkbox" checked/> &nbsp; <label>Symbols</label></div>
+        <div class="row" style="align-items:center"><input id="gNoAmb" type="checkbox"/> &nbsp; <label>No ambiguous</label></div>
+      </div>
+      <div class="space"></div>
+      <input id="gOut" placeholder="Generated password" />
+      <div class="footer">
+        <button class="btn" id="gClose">Close</button>
+        <button class="btn" id="gCopy">Copy</button>
+        <button class="btn ok" id="gUse">Use</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal" id="modalSettings">
+    <div class="dialog">
+      <div class="section-title">Settings</div>
+      <div class="grid grid-2">
+        <div>
+          <label>Auto-lock (minutes of inactivity)</label>
+          <input id="sTimeout" type="number" min="1" max="120" value="5" />
+        </div>
+        <div class="row" style="align-items:center"><input id="sIdleLock" type="checkbox" checked/> &nbsp; <label>Lock when tab hidden</label></div>
+        <div class="row" style="align-items:center"><input id="sBlur" type="checkbox"/> &nbsp; <label>Blur sensitive UI (anti-shoulder-surfing)</label></div>
+      </div>
+      <hr/>
+      <div class="small">Panic Wipe: tap the logo <b>5×</b> quickly, or enter your Panic Password on any password prompt.</div>
+      <div class="footer">
+        <button class="btn" id="btnCloseSettings">Close</button>
+        <button class="btn danger" id="btnPanicNow">Panic Wipe Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEW: Per-Item Key Prompt Modal -->
+  <div class="modal" id="modalItemKey">
+    <div class="dialog">
+      <div class="section-title">Enter Item Decrypt Key</div>
+      <input id="ikKey" type="password" placeholder="Per-item key"/>
+      <div id="ikMsg" class="small"></div>
+      <div class="footer">
+        <button class="btn" id="ikCancel">Cancel</button>
+        <button class="btn ok" id="ikOk">Continue</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ============================
+   PART 2 — CRYPTO & STORAGE
+   Web Crypto API helpers:
+   - PBKDF2(SHA-256) -> AES-GCM (256-bit)
+   - Per-entry IV (12 bytes)
+   - Base64 utils
+   - LocalStorage schema (real/fake)
+   ============================ */
+
+const LS = {
+  REAL_SALT: 'vault.real.salt',
+  REAL_VERIFIER: 'vault.real.verifier',      // AES-GCM encrypted "ok"
+  REAL_ITEMS: 'vault.real.items',            // Array of encrypted entries
+  FAKE_SALT: 'vault.fake.salt',
+  FAKE_VERIFIER: 'vault.fake.verifier',
+  FAKE_ITEMS: 'vault.fake.items',
+  BACKUP_PIN_HASH: 'vault.backup.pin.sha256',
+  PANIC_PW_HASH: 'vault.panic.pw.sha256',
+  SETTINGS: 'vault.settings'                 // {timeoutMin, idleLock, blurGuard}
+};
+
+/** Random bytes */
+function randBytes(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return a; }
+/** UTF8 helpers */
+const enc = new TextEncoder(), dec = new TextDecoder();
+/** Base64 <-> ArrayBuffer */
+function b64uEncode(buf){
+  let bin = '';
+  const bytes = new Uint8Array(buf);
+  for(let b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64uDecode(str){
+  str = str.replace(/-/g,'+').replace(/_/g,'/');
+  const pad = str.length % 4 ? 4 - (str.length % 4) : 0;
+  str += '='.repeat(pad);
+  const bin = atob(str);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+/** SHA-256 (ArrayBuffer) */
+async function sha256(buf){
+  return await crypto.subtle.digest('SHA-256', buf);
+}
+/** PBKDF2 -> AES-GCM key (256-bit) */
+async function deriveKey(password, salt, iterations=200000){
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return await crypto.subtle.deriveKey(
+    { name:'PBKDF2', hash:'SHA-256', salt, iterations },
+    baseKey,
+    { name:'AES-GCM', length:256 },
+    false,
+    ['encrypt','decrypt']
+  );
+}
+/** AES-GCM encrypt raw UTF8 text -> {iv, ct} b64url */
+async function aesEncryptText(key, text){
+  const iv = randBytes(12);
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, enc.encode(text));
+  return { iv: b64uEncode(iv), ct: b64uEncode(ct) };
+}
+/** AES-GCM decrypt raw UTF8 text from {iv, ct} (b64url) */
+async function aesDecryptText(key, ivB64u, ctB64u){
+  const iv = new Uint8Array(b64uDecode(ivB64u));
+  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, b64uDecode(ctB64u));
+  return dec.decode(pt);
+}
+/** AES-GCM encrypt JSON object (stringify first) */
+async function aesEncryptJSON(key, obj){
+  return aesEncryptText(key, JSON.stringify(obj));
+}
+/** AES-GCM decrypt JSON object (parse after) */
+async function aesDecryptJSON(key, iv, ct){
+  const s = await aesDecryptText(key, iv, ct);
+  return JSON.parse(s);
+}
+
+/** Utility: stable nanoid */
+function nanoid(size=21){
+  const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const bytes = randBytes(size);
+  let id = '';
+  for (let b of bytes) id += chars[b % chars.length];
+  return id;
+}
+
+/** Storage helpers */
+function saveLS(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
+function loadLS(k, def=null){ const s=localStorage.getItem(k); return s? JSON.parse(s): def; }
+function delLS(k){ localStorage.removeItem(k); }
+
+/** Constant-time compare of two Uint8Array buffers */
+function equalBytes(a,b){
+  if(a.byteLength !== b.byteLength) return false;
+  let out = 0;
+  for (let i=0;i<a.byteLength;i++) out |= a[i]^b[i];
+  return out === 0;
+}
+
+/** Hash a string to hex (for PIN/Panic PW) */
+async function sha256Hex(str){
+  const h = await sha256(enc.encode(str));
+  const arr = new Uint8Array(h);
+  return Array.from(arr).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+/** Vault schema:
+  - salts stored raw as base64url
+  - verifier: AES-GCM of constant "ok"
+  - items: [{ id, type, title, tags, createdAt, updatedAt, payload: { iv, ct } }]
+  - payload contains:
+      legacy: { type,title,user,secret,notes,tags,fileBase64 }
+      new:    { type,title,user,tags, inner:{ salt, iv, ct, v:1 } }
+*/
+function ensureSettings(){
+  const s = loadLS(LS.SETTINGS);
+  if (!s) saveLS(LS.SETTINGS, { timeoutMin: 5, idleLock: true, blurGuard: false });
+  return loadLS(LS.SETTINGS);
+}
+
+/* ============================
+   PART 3 — APP LOGIC & UI
+   ============================ */
+
+const $ = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+/* State (not persisted) */
+let current = {
+  mode: 'real',           // 'real' | 'fake'
+  key: null,              // CryptoKey (AES-GCM)
+  items: [],              // encrypted entries metadata
+  lastActive: Date.now()
+};
+
+/* Transient editing state for per-item keys */
+let editingId = null;
+let editingHadInner = false;
+let editingItemKey = ''; // the key used to decrypt inner when editing (if any)
+
+/* First-run / visibility */
+function show(id){
+  ['setup','unlock','vault'].forEach(x => $('#'+x).classList.add('hidden'));
+  if (id) $('#'+id).classList.remove('hidden');
+}
+function setLocked(locked){
+  document.body.dataset.locked = String(locked);
+  $('#lockBtn').textContent = locked ? 'Unlock' : 'Lock';
+  if (locked) { show('unlock'); }
+  else { show('vault'); }
+}
+
+/* Init UI state */
+(function init(){
+  const hasReal = !!localStorage.getItem(LS.REAL_SALT);
+  ensureSettings();
+  if (hasReal) { show('unlock'); }
+  else { show('setup'); }
+  const st = loadLS(LS.SETTINGS);
+  if (st.blurGuard) document.body.classList.add('blur');
+
+  // Accessibility: enter to trigger primary actions
+  $('#setupMaster')?.addEventListener('keydown', e=>{ if(e.key==='Enter') $('#btnCreate').click() });
+  $('#unlockPassword')?.addEventListener('keydown', e=>{ if(e.key==='Enter') $('#btnUnlock').click() });
+})();
+
+/* Anti-shoulder-surfing blur toggle */
+$('#toggleBlur').addEventListener('click', ()=>{
+  document.body.classList.toggle('blur');
+  const s = loadLS(LS.SETTINGS); s.blurGuard = document.body.classList.contains('blur'); saveLS(LS.SETTINGS, s);
+  $('#toggleBlur').textContent = document.body.classList.contains('blur') ? 'Unblur' : 'Blur';
+});
+
+/* Lock button */
+$('#lockBtn').addEventListener('click', ()=>{
+  if (document.body.dataset.locked === 'true') {
+    show('unlock');
+  } else {
+    lockVault();
+  }
+});
+
+/* Setup: Create vault */
+$('#btnCreate').addEventListener('click', async ()=>{
+  const master = $('#setupMaster').value.trim();
+  const master2 = $('#setupMaster2').value.trim();
+  const pin = $('#setupPin').value.trim();
+  const decoy = $('#setupDecoy').value.trim();
+  const panic = $('#setupPanic').value.trim();
+
+  if (!master || master.length < 10) return alert('Use a strong master password (min 10 chars).');
+  if (master !== master2) return alert('Master passwords do not match.');
+  if (!pin || pin.length < 4) return alert('Backup PIN must be 4–8 digits.');
+
+  // REAL
+  const realSalt = randBytes(16);
+  const realKey = await deriveKey(master, realSalt);
+  const verifier = await aesEncryptText(realKey, 'ok');
+
+  // Save salts/verifiers
+  localStorage.setItem(LS.REAL_SALT, b64uEncode(realSalt));
+  saveLS(LS.REAL_VERIFIER, verifier);
+  saveLS(LS.REAL_ITEMS, []); // empty list
+
+  // BACKUP + PANIC hashes (hex)
+  saveLS(LS.BACKUP_PIN_HASH, await sha256Hex(pin));
+  if (panic) saveLS(LS.PANIC_PW_HASH, await sha256Hex(panic));
+
+  // FAKE vault optional (only if decoy provided)
+  if (decoy){
+    const fakeSalt = randBytes(16);
+    const fakeKey = await deriveKey(decoy, fakeSalt);
+    const fakeVerifier = await aesEncryptText(fakeKey, 'ok');
+    localStorage.setItem(LS.FAKE_SALT, b64uEncode(fakeSalt));
+    saveLS(LS.FAKE_VERIFIER, fakeVerifier);
+    // Pre-fill believable items
+    const pre = [
+      {type:'note', title:'Shopping list', user:'', secret:'milk, rice, eggs', notes:'', tags:'personal'},
+      {type:'login', title:'Old Facebook', user:'my.old.mail@example.com', secret:'Summer@123', notes:'rarely used', tags:'social'},
+    ];
+    const encItems = [];
+    for (const x of pre){
+      const payload = await aesEncryptJSON(fakeKey, x);
+      encItems.push({ id:nanoid(), type:x.type, title:x.title, tags:x.tags, createdAt:Date.now(), updatedAt:Date.now(), payload });
+    }
+    saveLS(LS.FAKE_ITEMS, encItems);
+  }
+
+  alert('Vault created. Remember: there is NO recovery without your master password.');
+  $('#setupMaster').value = $('#setupMaster2').value = $('#setupPin').value = $('#setupDecoy').value = $('#setupPanic').value = '';
+  show('unlock');
+});
+
+/* Unlock: with password or PIN wipe */
+$('#btnUnlock').addEventListener('click', async ()=>{
+  const pw = $('#unlockPassword').value;
+  const pin = $('#unlockPin').value;
+
+  if (pin) { alert('If you want to wipe, use "Wipe with PIN" button.'); return; }
+  if (!pw) return;
+
+  // Panic password?
+  const pHash = loadLS(LS.PANIC_PW_HASH);
+  if (pHash && (await sha256Hex(pw)) === pHash){ panicWipe(); return; }
+
+  // Try REAL first
+  const realSaltB64 = localStorage.getItem(LS.REAL_SALT);
+  if (!realSaltB64) return alert('No vault found. Create one.');
+  try{
+    const key = await deriveKey(pw, new Uint8Array(b64uDecode(realSaltB64)));
+    const ver = loadLS(LS.REAL_VERIFIER);
+    const ok = await aesDecryptText(key, ver.iv, ver.ct);
+    if (ok === 'ok'){
+      await openVault('real', key);
+      return;
+    }
+  }catch(e){/* try fake next */}
+
+  // Try FAKE (if exists)
+  const fakeSaltB64 = localStorage.getItem(LS.FAKE_SALT);
+  if (fakeSaltB64){
+    try{
+      const key = await deriveKey(pw, new Uint8Array(b64uDecode(fakeSaltB64)));
+      const ver = loadLS(LS.FAKE_VERIFIER);
+      const ok = await aesDecryptText(key, ver.iv, ver.ct);
+      if (ok === 'ok'){
+        await openVault('fake', key);
+        return;
+      }
+    }catch(e){/* fallthrough */}
+  }
+
+  $('#unlockHint').textContent = 'Wrong password (or different mode). Tip: Decoy opens a fake vault if you set one.';
+  $('#unlockHint').style.color = 'var(--danger)';
+});
+
+/* Wipe with Backup PIN */
+$('#btnWipeWithPin').addEventListener('click', async ()=>{
+  const pin = $('#unlockPin').value.trim();
+  const stored = loadLS(LS.BACKUP_PIN_HASH);
+  if (!stored) return alert('No backup PIN set.');
+  if (!pin) return alert('Enter the PIN to wipe.');
+  const h = await sha256Hex(pin);
+  if (h !== stored) return alert('Invalid PIN.');
+  if (!confirm('This wipes ALL encrypted data (real and fake). Continue?')) return;
+  wipeAll();
+  alert('Wiped. You can now create a new vault.');
+  show('setup');
+});
+
+/* Import/Export */
+$('#btnImport').addEventListener('click', ()=> $('#importFile').click());
+$('#importFile').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  try{
+    const obj = JSON.parse(text);
+    if (!obj || !obj.schema || obj.schema!=='local-vault.v1') throw new Error('bad schema');
+    const useFake = confirm('Import as FAKE vault? (OK = fake, Cancel = real)');
+    if (useFake){
+      localStorage.setItem(LS.FAKE_SALT, obj.saltB64);
+      saveLS(LS.FAKE_VERIFIER, obj.verifier);
+      saveLS(LS.FAKE_ITEMS, obj.items||[]);
+    } else {
+      localStorage.setItem(LS.REAL_SALT, obj.saltB64);
+      saveLS(LS.REAL_VERIFIER, obj.verifier);
+      saveLS(LS.REAL_ITEMS, obj.items||[]);
+    }
+    alert('Imported. Use the matching password for that vault.');
+    show('unlock');
+  }catch(err){
+    alert('Invalid file.');
+  }finally{
+    e.target.value = '';
+  }
+});
+$('#btnExport').addEventListener('click', async ()=>{
+  if (!current.key) return;
+  const saltB64 = localStorage.getItem(current.mode==='real'? LS.REAL_SALT: LS.FAKE_SALT);
+  const verifier = loadLS(current.mode==='real'? LS.REAL_VERIFIER: LS.FAKE_VERIFIER);
+  const items = loadLS(current.mode==='real'? LS.REAL_ITEMS: LS.FAKE_ITEMS);
+  const blob = new Blob([JSON.stringify({schema:'local-vault.v1', mode:current.mode, saltB64, verifier, items})], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `vault-${current.mode}-${new Date().toISOString().slice(0,19)}.json`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+});
+
+/* Open vault (load items metadata; secrets are decrypted on demand when needed) */
+async function openVault(mode, key){
+  current.mode = mode; current.key = key; current.lastActive = Date.now();
+  $('#vaultMode').textContent = mode;
+  $('#vaultMode').style.background = mode==='fake' ? '#2a2131' : '#13202c';
+  $('#vaultMode').style.borderColor = mode==='fake' ? '#3a2a45' : '#223346';
+  setLocked(false);
+  await refreshList();
+  wireActivityTracking();
+  $('#unlockPassword').value = $('#unlockPin').value = '';
+}
+
+/* Lock vault (forgets key and hides UI) */
+function lockVault(){
+  current.key = null;
+  current.items = [];
+  setLocked(true);
+}
+
+/* Panic wipe helpers */
+function wipeAll(){
+  [LS.REAL_SALT, LS.REAL_VERIFIER, LS.REAL_ITEMS, LS.FAKE_SALT, LS.FAKE_VERIFIER, LS.FAKE_ITEMS, LS.BACKUP_PIN_HASH, LS.PANIC_PW_HASH].forEach(delLS);
+}
+function panicWipe(){
+  wipeAll();
+  alert('Panic wipe completed.');
+  location.reload();
+}
+
+/* Hidden panic gesture: 5 taps on logo quickly */
+(function(){
+  let taps = 0, t0 = 0;
+  $('#brandTap').addEventListener('click', ()=>{
+    const t = Date.now();
+    if (t - t0 > 1200) taps = 0;
+    taps++; t0 = t;
+    if (taps >= 5){
+      if (confirm('Panic wipe now? This deletes ALL vault data.')) panicWipe();
+      taps = 0;
+    }
+  });
+})();
+
+/* Add/Edit Item modal logic */
+$('#btnAdd').addEventListener('click', ()=> openEdit());
+$('#btnCancelEdit').addEventListener('click', closeEdit);
+$('#btnSaveEdit').addEventListener('click', saveEdit);
+
+$('#toggleSecret').addEventListener('click', ()=>{
+  const el = $('#fSecret'); el.type = el.type==='password' ? 'text' : 'password';
+});
+$('#btnCopySecret').addEventListener('click', ()=> copyWithAutoClear($('#fSecret').value));
+$('#openGen').addEventListener('click', ()=> openGen());
+$('#gClose').addEventListener('click', ()=> closeGen());
+$('#gCopy').addEventListener('click', ()=> copyWithAutoClear($('#gOut').value));
+$('#gUse').addEventListener('click', ()=> { $('#fSecret').value = $('#gOut').value; closeGen(); });
+
+$('#btnSettings').addEventListener('click', ()=> openSettings());
+$('#btnCloseSettings').addEventListener('click', ()=> closeSettings());
+$('#btnPanicNow').addEventListener('click', ()=> { if(confirm('Panic wipe now?')) panicWipe(); });
+
+/* Search/filter */
+$('#search').addEventListener('input', refreshList);
+$('#filterType').addEventListener('change', refreshList);
+
+/* Idle / tab-hidden autolock */
+function wireActivityTracking(){
+  ['click','keydown','mousemove','scroll','touchstart'].forEach(evt=>{
+    window.addEventListener(evt, ()=> current.lastActive = Date.now(), {passive:true});
+  });
+  document.addEventListener('visibilitychange', ()=>{
+    const s = loadLS(LS.SETTINGS);
+    if (s.idleLock && document.hidden) lockVault();
+  });
+  setInterval(()=>{
+    const s = loadLS(LS.SETTINGS);
+    const ms = (s.timeoutMin||5)*60*1000;
+    if (current.key && Date.now() - current.lastActive > ms) lockVault();
+  }, 2000);
+}
+
+/* Clipboard copy with auto-clear (best effort) */
+async function copyWithAutoClear(text, ttlSec=20){
+  if (!text) return;
+  try{
+    await navigator.clipboard.writeText(text);
+    alert(`Copied to clipboard. It will be cleared in ${ttlSec}s if possible.`);
+    setTimeout(async ()=>{
+      try{ await navigator.clipboard.writeText(''); }catch(_){}
+    }, ttlSec*1000);
+  }catch(e){
+    prompt('Copy manually:', text);
+  }
+}
+
+/* Open/close modals */
+function openEdit(item=null){
+  editingId = item?.id || null;
+  editingHadInner = !!item?.__hadInner;      // internal marker we add when opening from inner
+  editingItemKey = item?.__itemKey || '';    // remember the key used for inner decryption (if any)
+
+  $('#editTitle').textContent = editingId ? 'Edit item' : 'Add item';
+  $('#fType').value = item?.type || 'login';
+  $('#fTitle').value = item?.title || '';
+  $('#fUser').value = item?.user || '';
+  $('#fSecret').value = item?.secret || '';
+  $('#fNotes').value = item?.notes || '';
+  $('#fTags').value = item?.tags || '';
+  $('#fFile').value = '';
+  $('#fItemKey').value = ''; // never prefill
+  $('#modalEdit').classList.add('open');
+}
+function closeEdit(){ $('#modalEdit').classList.remove('open'); }
+function openGen(){ $('#modalGen').classList.add('open'); $('#gOut').value = generatePassword(); }
+function closeGen(){ $('#modalGen').classList.remove('open'); }
+function openSettings(){
+  const s = loadLS(LS.SETTINGS);
+  $('#sTimeout').value = s.timeoutMin || 5;
+  $('#sIdleLock').checked = !!s.idleLock;
+  $('#sBlur').checked = !!s.blurGuard;
+  $('#modalSettings').classList.add('open');
+}
+function closeSettings(){
+  const s = loadLS(LS.SETTINGS);
+  s.timeoutMin = Math.max(1, Number($('#sTimeout').value)||5);
+  s.idleLock = $('#sIdleLock').checked;
+  s.blurGuard = $('#sBlur').checked;
+  saveLS(LS.SETTINGS, s);
+  document.body.classList.toggle('blur', s.blurGuard);
+  $('#modalSettings').classList.remove('open');
+}
+
+/* Password generator */
+function generatePassword(){
+  const len = Math.min(128, Math.max(6, Number($('#gLen').value)||20));
+  const sets = [];
+  if ($('#gUpper').checked) sets.push('ABCDEFGHJKLMNPQRSTUVWXYZ'); // no I/O by default
+  if ($('#gLower').checked) sets.push('abcdefghijkmnopqrstuvwxyz'); // no l
+  if ($('#gDigits').checked) sets.push('23456789'); // no 0/1
+  if ($('#gSymbols').checked) sets.push('!@#$%^&*()-_=+[]{};:,.<>?');
+  let all = sets.join('');
+  if (!$('#gNoAmb').checked){
+    all += 'IOlo01|`~';
+  }
+  if (!all) all = 'abcdefghijkmnopqrstuvwxyz';
+  const bytes = randBytes(len);
+  let out = '';
+  for (let i=0;i<len;i++){
+    out += all[bytes[i] % all.length];
+  }
+  return out;
+}
+
+/* ---------- NEW: per-item key helpers ---------- */
+async function encryptInnerWithItemKey(itemKey, obj){
+  const salt = randBytes(16);
+  const key = await deriveKey(itemKey, salt);
+  const encd = await aesEncryptJSON(key, obj);
+  return { salt: b64uEncode(salt), iv: encd.iv, ct: encd.ct, v:1 };
+}
+async function decryptInnerWithItemKey(itemKey, inner){
+  const key = await deriveKey(itemKey, new Uint8Array(b64uDecode(inner.salt)));
+  return await aesDecryptJSON(key, inner.iv, inner.ct);
+}
+/* Prompt for per-item key; supports panic password */
+function promptItemKey(inner){
+  return new Promise((resolve)=>{
+    const modal = $('#modalItemKey');
+    const input = $('#ikKey');
+    const msg = $('#ikMsg');
+    msg.textContent = '';
+    input.value = '';
+    modal.classList.add('open');
+    const onCancel = ()=>{
+      cleanup();
+      resolve(null);
+    };
+    const onOk = async ()=>{
+      const k = input.value;
+      if (!k){ msg.textContent = 'Enter a key.'; return; }
+      const pHash = loadLS(LS.PANIC_PW_HASH);
+      if (pHash){
+        sha256Hex(k).then(hex=>{
+          if (hex === pHash){ cleanup(); panicWipe(); }
+        });
+      }
+      try{
+        const data = await decryptInnerWithItemKey(k, inner);
+        cleanup();
+        resolve({data, key:k});
+      }catch(e){
+        msg.textContent = 'Wrong key. Try again.';
+      }
+    };
+    function cleanup(){
+      $('#ikCancel').removeEventListener('click', onCancel);
+      $('#ikOk').removeEventListener('click', onOk);
+      modal.classList.remove('open');
+    }
+    $('#ikCancel').addEventListener('click', onCancel);
+    $('#ikOk').addEventListener('click', onOk);
+    input.onkeydown = (e)=>{ if(e.key==='Enter') onOk(); };
+    setTimeout(()=> input.focus(), 0);
+  });
+}
+
+/* Save Add/Edit */
+async function saveEdit(){
+  if (!current.key) return alert('Vault is locked.');
+  const type = $('#fType').value;
+  const title = $('#fTitle').value.trim();
+  const user = $('#fUser').value.trim();
+  const secret = $('#fSecret').value;
+  const notes = $('#fNotes').value;
+  const tags = $('#fTags').value.trim();
+  const itemKeyInput = $('#fItemKey').value.trim();
+
+  let fileBase64 = null;
+  const file = $('#fFile').files[0];
+  if (file){
+    fileBase64 = await new Promise(res=>{
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(file);
+    });
+  }
+
+  if (!title) return alert('Title is required.');
+
+  // Build payload: either legacy (no per-item key) or nested-encrypted (inner)
+  let payloadObj = { type, title, user, tags };
+
+  // Determine effective item key:
+  // - If user typed a new key, use it.
+  // - Else if we are editing an item that already had inner, reuse the key we used to decrypt.
+  const effectiveItemKey = itemKeyInput || (editingHadInner ? editingItemKey : '');
+
+  if (effectiveItemKey){
+    const inner = await encryptInnerWithItemKey(effectiveItemKey, { secret, notes, fileBase64 });
+    payloadObj.inner = inner;
+  } else {
+    // legacy plaintext fields inside master-encrypted payload
+    payloadObj.secret = secret;
+    payloadObj.notes = notes;
+    payloadObj.fileBase64 = fileBase64;
+  }
+
+  const payload = await aesEncryptJSON(current.key, payloadObj);
+
+  let items = loadLS(current.mode==='real'? LS.REAL_ITEMS: LS.FAKE_ITEMS);
+  if (editingId){
+    const idx = items.findIndex(x=>x.id===editingId);
+    if (idx>=0){
+      items[idx] = {
+        ...items[idx],
+        type, title, tags,
+        updatedAt: Date.now(),
+        payload
+      };
+    }
+  }else{
+    items.push({ id:nanoid(), type, title, tags, createdAt: Date.now(), updatedAt: Date.now(), payload });
+  }
+  saveLS(current.mode==='real'? LS.REAL_ITEMS: LS.FAKE_ITEMS, items);
+  await refreshList();
+  closeEdit();
+}
+
+/* Render list (no secret decryption here) */
+async function refreshList(){
+  const q = $('#search').value.trim().toLowerCase();
+  const ft = $('#filterType').value;
+  const list = $('#list');
+  const items = loadLS(current.mode==='real'? LS.REAL_ITEMS: LS.FAKE_ITEMS) || [];
+  current.items = items;
+
+  const filtered = items.filter(it=>{
+    const t = (it.title||'') + ' ' + (it.tags||'') + ' ' + (it.type||'');
+    return (!q || t.toLowerCase().includes(q)) && (!ft || it.type===ft);
+  }).sort((a,b)=>b.updatedAt - a.updatedAt);
+
+  list.innerHTML = '';
+  if (filtered.length === 0){
+    list.innerHTML = `<div class="small">No items yet. Click “Add Item”.</div>`;
+    return;
+  }
+
+  for (const it of filtered){
+    const row = document.createElement('div');
+    row.className = 'item guardable';
+    row.innerHTML = `
+      <div>
+        <h4>${escapeHtml(it.title)} <span class="badge">${escapeHtml(it.type)}</span></h4>
+        <div class="kv">
+          <div><small class="small">Updated:</small> <span class="small mono">${new Date(it.updatedAt).toLocaleString()}</span></div>
+          <div><small class="small">Tags:</small> <span class="small mono">${escapeHtml(it.tags||'-')}</span></div>
+          <div><button class="btn ghost btnView">View/Decrypt</button></div>
+          <div><button class="btn ghost btnEdit">Edit</button></div>
+          <div><button class="btn danger btnDel">Delete</button></div>
+        </div>
+      </div>
+      <div class="tag">${shortId(it.id)}</div>
+    `;
+    // Actions
+    row.querySelector('.btnView').addEventListener('click', async ()=>{
+      try{
+        const data = await aesDecryptJSON(current.key, it.payload.iv, it.payload.ct);
+        if (data.inner){
+          const res = await promptItemKey(data.inner);
+          if (!res) return; // cancelled
+          const innerData = res.data;
+          showDetail(it, { ...data, ...innerData });
+        } else {
+          showDetail(it, data);
+        }
+      }catch(e){
+        alert('Failed to decrypt. Wrong key?');
+      }
+    });
+    row.querySelector('.btnEdit').addEventListener('click', async ()=>{
+      try{
+        const data = await aesDecryptJSON(current.key, it.payload.iv, it.payload.ct);
+        if (data.inner){
+          const res = await promptItemKey(data.inner);
+          if (!res) return;
+          const innerData = res.data;
+          // mark that this item had inner & remember key so saving without new key keeps it
+          openEdit({ ...data, ...innerData, id: it.id, __hadInner:true, __itemKey: res.key });
+        } else {
+          openEdit({ ...data, id: it.id });
+        }
+      }catch(e){
+        alert('Failed to decrypt.');
+      }
+    });
+    row.querySelector('.btnDel').addEventListener('click', ()=>{
+      if (!confirm('Delete this item?')) return;
+      let items = loadLS(current.mode==='real'? LS.REAL_ITEMS: LS.FAKE_ITEMS) || [];
+      items = items.filter(x=>x.id!==it.id);
+      saveLS(current.mode==='real'? LS.REAL_ITEMS: LS.FAKE_ITEMS, items);
+      refreshList();
+    });
+    list.appendChild(row);
+  }
+}
+
+/* Detail viewer (in-place modal) */
+function showDetail(meta, data){
+  const wrap = document.createElement('div');
+  wrap.className = 'card guardable';
+  wrap.style.position='fixed'; wrap.style.inset='0'; wrap.style.margin='auto';
+  wrap.style.width='min(640px,92vw)'; wrap.style.height='auto'; wrap.style.zIndex='60';
+  wrap.innerHTML = `
+    <div class="section-title">${escapeHtml(meta.title)} <span class="badge">${escapeHtml(meta.type)}</span></div>
+    <div class="grid">
+      ${data.user? `<div><div class="small">User / Label</div><div class="mono">${escapeHtml(data.user)}</div></div>`:''}
+      ${data.secret? `<div><div class="small">Secret</div><div class="row">
+          <input id="dSecret" type="password" value="${escapeHtmlAttr(data.secret)}" readonly />
+          <button id="dToggle" class="btn">👁</button>
+          <button id="dCopy" class="btn">Copy</button>
+        </div></div>`:''}
+      ${data.notes? `<div style="grid-column:1/-1"><div class="small">Notes</div><div class="mono" style="white-space:pre-wrap">${escapeHtml(data.notes)}</div></div>`:''}
+      ${data.fileBase64? `<div style="grid-column:1/-1"><div class="small">Attachment</div>
+        ${data.fileBase64.startsWith('data:image')? `<img src="${data.fileBase64}" style="max-width:100%; border-radius:.6rem; border:1px solid #1c2a3b"/>`:
+        `<a download href="${data.fileBase64}" class="btn">Download Attachment</a>`}
+      </div>`:''}
+      <div style="grid-column:1/-1" class="row" >
+        <button class="btn" id="dClose">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  $('#dToggle')?.addEventListener('click', ()=>{ const el=$('#dSecret'); if(el) el.type = el.type==='password' ? 'text':'password'; });
+  $('#dCopy')?.addEventListener('click', ()=>{ const el=$('#dSecret'); if(el) copyWithAutoClear(el.value); });
+  $('#dClose').addEventListener('click', ()=> wrap.remove());
+}
+
+/* Helpers */
+function shortId(id){ return id.slice(0,8); }
+function escapeHtml(s){ return (s??'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' }[m])); }
+function escapeHtmlAttr(s){ return escapeHtml(s).replace(/"/g,'&quot;'); }
+
+/* Settings blur toggle button label */
+$('#toggleBlur').textContent = document.body.classList.contains('blur') ? 'Unblur' : 'Blur';
+
+</script>
+</body>
+</html>
